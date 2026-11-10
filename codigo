@@ -1,34 +1,136 @@
-9107627921:AAGqNZKwd6AKnZkt2FVD4Wf-IDf56jCNRsA
 
-from deep_translator import GoogleTranslator
+9107627921:AAGuCxSVc3a4KVNGE3PEWVHw2AWMkJdjLMI
 
-def traduzir(texto):
+import html
+import random
+import time
+import requests
+
+# Seu token do Telegram e URL da API OpenTDB
+TOKEN = "9107627921:AAGqNZKwd6AKnZkt2FVD4Wf-IDf56jCNRsA"
+BASE_URL = f"https://api.telegram.org/bot{TOKEN}"
+TRIVIA_URL = "https://opentdb.com/api.php?amount=10&type=multiple"
+
+
+def obter_perguntas():
+  """Busca as 10 perguntas na API externa OpenTDB."""
+  response = requests.get(TRIVIA_URL)
+  if response.status_code == 200:
+    data = response.json()
+    return data.get("results", [])
+  return []
+
+
+def enviar_mensagem(chat_id, texto):
+  """Envia uma mensagem de texto simples usando a API HTTP do Telegram."""
+  url = f"{BASE_URL}/sendMessage"
+  payload = {"chat_id": chat_id, "text": texto, "parse_mode": "Markdown"}
+  requests.post(url, json=payload)
+
+
+def obter_atualizacoes(offset=None):
+  """Busca novas mensagens/comandos enviados pelos usuários."""
+  url = f"{BASE_URL}/getUpdates"
+  params = {"timeout": 30, "offset": offset}
+  response = requests.get(url, params=params)
+  return response.json()
+
+
+def iniciar_bot():
+  print("🤖 Bot rodando via requisições HTTP diretas... Pressione CTRL+C para parar.")
+  last_update_id = None
+  
+  # Dicionário para controlar o estado do jogo por usuário: {chat_id: {"perguntas": [...], "indice": 0, "pontos": 0}}
+  sessoes = {}
+
+  while True:
     try:
-        return GoogleTranslator(source="en", target="pt").translate(texto) or texto
-    except Exception:
-        return texto
+      resposta = obter_atualizacoes(offset=last_update_id)
+      updates = resposta.get("result", [])
 
-def enviar_quiz(chat_id, p):
-    pergunta = html.unescape(p["question"])
-    certa = html.unescape(p["correct_answer"])
-    opcoes = [html.unescape(x) for x in p["incorrect_answers"]] + [certa]
+      for update in updates:
+        last_update_id = update["update_id"] + 1
 
-    pergunta_pt = traduzir(pergunta)
-    opcoes_pt = [traduzir(o) for o in opcoes]
-    # se a tradução repetiu opções, usa o original
-    if len(set(opcoes_pt)) != len(opcoes_pt):
-        opcoes_pt = opcoes
+        # Verifica se a mensagem contém texto
+        if "message" in update and "text" in update["message"]:
+          chat_id = update["message"]["chat"]["id"]
+          texto_usuario = update["message"]["text"].strip()
 
-    ordem = list(range(len(opcoes_pt)))
-    random.shuffle(ordem)
-    final = [opcoes_pt[i] for i in ordem]
-    indice_certo = ordem.index(len(opcoes_pt) - 1)
+          # Comando /start ou /quiz para iniciar o jogo
+          if texto_usuario in ["/start", "/quiz"]:
+            perguntas = obter_perguntas()
+            if perguntas:
+              sessoes[chat_id] = {
+                  "perguntas": perguntas,
+                  "indice": 0,
+                  "pontos": 0,
+              }
+              enviar_mensagem(
+                  chat_id,
+                  "🎮 *Bem-vindo ao Quiz Bot!* Vamos começar a primeira pergunta:",
+              )
+              enviar_proxima_pergunta(chat_id, sessoes)
+            else:
+              enviar_mensagem(
+                  chat_id,
+                  "Erro ao carregar as perguntas da API. Tente novamente mais tarde.",
+              )
 
-    requests.post(f"{URL}/sendPoll", json={
-        "chat_id": chat_id,
-        "question": pergunta_pt[:300],
-        "options": [o[:100] for o in final],
-        "type": "quiz",
-        "correct_option_id": indice_certo,
-        "is_anonymous": False,
-    })
+          # Se o usuário mandar qualquer outra coisa durante o jogo (tentando responder digitando a alternativa)
+          elif chat_id in sessoes:
+            sessao = sessoes[chat_id]
+            indice = sessao["indice"]
+            
+            if indice < len(sessao["perguntas"]):
+              q_data = sessao["perguntas"][indice]
+              correta = html.unescape(q_data["correct_answer"])
+
+              # Valida a resposta do usuário
+              if texto_usuario.lower() == correta.lower():
+                sessao["pontos"] += 1
+                enviar_mensagem(chat_id, "✅ *Resposta Correta!*")
+              else:
+                enviar_mensagem(chat_id, f"❌ *Errado!* A resposta certa era: *{correta}*")
+
+              # Avança para a próxima pergunta
+              sessao["indice"] += 1
+              
+              if sessao["indice"] < len(sessao["perguntas"]):
+                enviar_proxima_pergunta(chat_id, sessoes)
+              else:
+                pontos_finais = sessao["pontos"]
+                enviar_mensagem(
+                    chat_id,
+                    f"🎉 *Fim do Quiz!*\n\nSua pontuação final foi: *{pontos_finais} / 10*.\n\nEnvie /quiz para jogar novamente.",
+                )
+                del sessoes[chat_id]
+
+    except Exception as e:
+      print(f"Ocorreu um erro: {e}")
+      time.sleep(3)
+
+
+def enviar_proxima_pergunta(chat_id, sessoes):
+  """Formata e envia a pergunta atual para o chat."""
+  sessao = sessoes[chat_id]
+  indice = sessao["indice"]
+  q_data = sessao["perguntas"][indice]
+
+  pergunta = html.unescape(q_data["question"])
+  correta = html.unescape(q_data["correct_answer"])
+  incorretas = [html.unescape(ans) for ans in q_data["incorrect_answers"]]
+
+  # Junta e embaralha as opções
+  opcoes = incorretas + [correta]
+  random.shuffle(opcoes)
+
+  texto = f"❓ *Pergunta {indice + 1}/10*\n\n{pergunta}\n\n*Opções:* \n"
+  for i, opcao in enumerate(opcoes, 1):
+    texto += f"{i}. {opcao}\n"
+  
+  texto += "\n_Digite o texto exato da sua resposta para responder!_"
+  enviar_mensagem(chat_id, texto)
+
+
+if __name__ == "__main__":
+  iniciar_bot()
