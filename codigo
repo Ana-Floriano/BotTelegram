@@ -1,1 +1,34 @@
+9107627921:AAGqNZKwd6AKnZkt2FVD4Wf-IDf56jCNRsA
 
+from deep_translator import GoogleTranslator
+
+def traduzir(texto):
+    try:
+        return GoogleTranslator(source="en", target="pt").translate(texto) or texto
+    except Exception:
+        return texto
+
+def enviar_quiz(chat_id, p):
+    pergunta = html.unescape(p["question"])
+    certa = html.unescape(p["correct_answer"])
+    opcoes = [html.unescape(x) for x in p["incorrect_answers"]] + [certa]
+
+    pergunta_pt = traduzir(pergunta)
+    opcoes_pt = [traduzir(o) for o in opcoes]
+    # se a tradução repetiu opções, usa o original
+    if len(set(opcoes_pt)) != len(opcoes_pt):
+        opcoes_pt = opcoes
+
+    ordem = list(range(len(opcoes_pt)))
+    random.shuffle(ordem)
+    final = [opcoes_pt[i] for i in ordem]
+    indice_certo = ordem.index(len(opcoes_pt) - 1)
+
+    requests.post(f"{URL}/sendPoll", json={
+        "chat_id": chat_id,
+        "question": pergunta_pt[:300],
+        "options": [o[:100] for o in final],
+        "type": "quiz",
+        "correct_option_id": indice_certo,
+        "is_anonymous": False,
+    })
