@@ -1,36 +1,36 @@
 import html
+import os
 import random
 import time
+from dotenv import load_dotenv
 import requests
 
-# Seu token do Telegram e URL da API da Disney
-TOKEN = "9107627921:AAGqNZKwd6AKnZkt2FVD4Wf-IDf56jCNRsA"
+load_dotenv()
+
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+
+if not TOKEN:
+  raise ValueError("Token do Telegram não encontrado!")
+
 BASE_URL = f"https://api.telegram.org/bot{TOKEN}"
-DISNEY_URL = "https://api.disneyapi.dev/character?pageSize=50"
+TRIVIA_URL = "https://opentdb.com/api.php?amount=10&type=multiple"
 
 
-def obter_personagens():
-  """Busca uma lista de personagens na Disney API."""
-  try:
-    response = requests.get(DISNEY_URL, timeout=10)
-    if response.status_code == 200:
-      data = response.json()
-      # A Disney API retorna os dados dentro da chave 'data'
-      return data.get("data", [])
-  except Exception as e:
-    print(f"Erro ao conectar com a Disney API: {e}")
+def obter_perguntas():
+  response = requests.get(TRIVIA_URL)
+  if response.status_code == 200:
+    data = response.json()
+    return data.get("results", [])
   return []
 
 
 def enviar_mensagem(chat_id, texto):
-  """Envia uma mensagem de texto simples usando a API HTTP do Telegram."""
   url = f"{BASE_URL}/sendMessage"
   payload = {"chat_id": chat_id, "text": texto, "parse_mode": "Markdown"}
   requests.post(url, json=payload)
 
 
 def obter_atualizacoes(offset=None):
-  """Busca novas mensagens/comandos enviados pelos usuários."""
   url = f"{BASE_URL}/getUpdates"
   params = {"timeout": 30, "offset": offset}
   response = requests.get(url, params=params)
@@ -38,13 +38,7 @@ def obter_atualizacoes(offset=None):
 
 
 def iniciar_bot():
-  print(
-      "🤖 Bot da Disney rodando via requisições HTTP diretas... Pressione"
-      " CTRL+C para parar."
-  )
   last_update_id = None
-
-  # Dicionário para controlar o estado do jogo por usuário
   sessoes = {}
 
   while True:
@@ -59,59 +53,45 @@ def iniciar_bot():
           chat_id = update["message"]["chat"]["id"]
           texto_usuario = update["message"]["text"].strip()
 
-          # Comando /start ou /quiz para iniciar
           if texto_usuario in ["/start", "/quiz"]:
-            personagens = obter_personagens()
-            if personagens:
-              # Embaralha e pega 5 personagens para o quiz
-              random.shuffle(personagens)
+            perguntas = obter_perguntas()
+            if perguntas:
               sessoes[chat_id] = {
-                  "personagens": personagens[:5],
+                  "perguntas": perguntas,
                   "indice": 0,
                   "pontos": 0,
               }
-              enviar_mensagem(
-                  chat_id,
-                  "🏰 *Bem-vindo ao Quiz da Disney!* Vamos adivinhar o"
-                  " personagem:",
-              )
+              enviar_mensagem(chat_id, "Bem-vindo ao Quiz! Vamos começar:")
               enviar_proxima_pergunta(chat_id, sessoes)
             else:
-              enviar_mensagem(
-                  chat_id,
-                  "Erro ao carregar os dados da Disney API. Tente novamente"
-                  " mais tarde.",
-              )
+              enviar_mensagem(chat_id, "Erro ao carregar as perguntas da API.")
 
-          # Validação da resposta digitada pelo usuário
           elif chat_id in sessoes:
             sessao = sessoes[chat_id]
             indice = sessao["indice"]
 
-            if indice < len(sessao["personagens"]):
-              p_atual = sessao["personagens"][indice]
-              nome_correto = p_atual.get("name", "")
+            if indice < len(sessao["perguntas"]):
+              q_data = sessao["perguntas"][indice]
+              correta = html.unescape(q_data["correct_answer"])
 
-              # Compara a resposta (ignorando maiúsculas/minúsculas)
-              if texto_usuario.lower() == nome_correto.lower():
+              if texto_usuario.lower() == correta.lower():
                 sessao["pontos"] += 1
-                enviar_mensagem(chat_id, "✅ *Resposta Correta!* 🎉")
+                enviar_mensagem(chat_id, "Resposta Correta!")
               else:
                 enviar_mensagem(
-                    chat_id,
-                    f"❌ *Errado!* O personagem correto era: *{nome_correto}*",
+                    chat_id, f"Errado! A resposta certa era: *{correta}*"
                 )
 
               sessao["indice"] += 1
 
-              if sessao["indice"] < len(sessao["personagens"]):
+              if sessao["indice"] < len(sessao["perguntas"]):
                 enviar_proxima_pergunta(chat_id, sessoes)
               else:
                 pontos_finais = sessao["pontos"]
                 enviar_mensagem(
                     chat_id,
-                    f"🎉 *Fim do Quiz da Disney!*\n\nSua pontuação final foi:"
-                    f" *{pontos_finais} / 5*.\n\nEnvie /quiz para jogar"
+                    f"Fim do Quiz!\n\nSua pontuação final foi:"
+                    f" *{pontos_finais} / 10*.\n\nEnvie /quiz para jogar"
                     " novamente.",
                 )
                 del sessoes[chat_id]
@@ -122,31 +102,22 @@ def iniciar_bot():
 
 
 def enviar_proxima_pergunta(chat_id, sessoes):
-  """Formata e envia dicas sobre o personagem atual."""
   sessao = sessoes[chat_id]
   indice = sessao["indice"]
-  p_data = sessao["personagens"][indice]
+  q_data = sessao["perguntas"][indice]
 
-  # Pegando algumas informações úteis da API da Disney
-  filmes = p_data.get("films", [])
-  jogos = p_data.get("videoGames", [])
-  parques = p_data.get("parkAttractions", [])
+  pergunta = html.unescape(q_data["question"])
+  correta = html.unescape(q_data["correct_answer"])
+  incorretas = [html.unescape(ans) for ans in q_data["incorrect_answers"]]
 
-  dica_filmes = (
-      ", ".join(filmes[:3]) if filmes else "Aparições em outras mídias da Disney"
-  )
+  opcoes = incorretas + [correta]
+  random.shuffle(opcoes)
 
-  texto = f"❓ *Personagem da Disney {indice + 1}/5*\n\n"
-  texto += f"🎬 *Filmes/Séries:* {dica_filmes}\n"
-  if jogos:
-    texto += f"🎮 *Jogos:* {', '.join(jogos[:2])}\n"
-  if parques:
-    texto += f"🎢 *Atrações nos Parques:* {', '.join(parques[:2])}\n"
+  texto = f"Pergunta {indice + 1}/10\n\n{pergunta}\n\nOpções: \n"
+  for i, opcao in enumerate(opcoes, 1):
+    texto += f"{i}. {opcao}\n"
 
-  texto += (
-      "\n_Quem é esse personagem? Digite o nome dele (em inglês, conforme a"
-      " API):_"
-  )
+  texto += "\nDigite o texto exato da sua resposta para responder!"
   enviar_mensagem(chat_id, texto)
 
 
