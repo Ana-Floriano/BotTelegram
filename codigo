@@ -1,3 +1,6 @@
+TELEGRAM_TOKEN=9107627921:AAGqNZKwd6AKnZkt2FVD4Wf-IDf56jCNRsA
+
+
 import html
 import os
 import random
