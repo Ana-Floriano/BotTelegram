@@ -1,0 +1,103 @@
+import os
+import time
+from dotenv import load_dotenv
+import requests
+
+load_dotenv(".env")
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+BASE_URL = f"https://api.telegram.org/bot{TOKEN}"
+
+user_news_state = {}
+GNEWS_URL = "https://gnews.io/api/v4/search?q=brasil&lang=pt&country=br&max=5&apikey=c88d9a4db1aca47c10886ed1c7a67032"
+
+def fetch_news():
+    response = requests.get(GNEWS_URL)
+
+    if response.status_code == 200:
+        return response.json().get("articles", [])
+
+    return []
+
+def send_message(chat_id, text):
+    url = f"{BASE_URL}/sendMessage"
+    data = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+    response = requests.post(url, data=data)
+    return response.json()    
+
+def send_next_news(chat_id):
+    state = user_news_state[chat_id]
+    articles = state["articles"]
+    index = state["index"]
+
+    if index >= len(articles):
+        send_message(chat_id,"Chegaste ao fim das noticias disponiveis.\n\nUsa /noticias para iniciar uma nova ronda!",)
+        
+        del user_news_state[chat_id]
+        return
+
+    art = articles[index]
+    title = art.get("title", "Sem título")
+    url_art = art.get("url", "")
+
+    msg = (f"Noticia {index + 1} de {len(articles)}\n\n" 
+        f"{title}\n\n"
+        f"Ler mais: {url_art}\n\n"
+        "<b>1.</b> Ver proxima noticia\n"
+        "<b>0.</b> Encerrar sessao\n\n"
+        "Responde enviando 1 ou 0.")
+    send_message(chat_id, msg)
+
+def main():
+    print("Bot de Noticias Sequencial (com 1 e 0) iniciado e a aguardar interacoes...")
+
+    requests.get(f"{BASE_URL}/deleteWebhook")
+    last_update_id = 0
+
+    while True:
+        updates_url = f"{BASE_URL}/getUpdates?offset={last_update_id + 1}&timeout=10"
+        response = requests.get(updates_url)   
+
+        if response.status_code == 200:
+            data = response.json()
+            updates = data.get("result", [])
+
+            for update in updates:
+                last_update_id = update["update_id"]   
+
+                if "message" in update and "text" in update["message"]:
+                    chat_id = update["message"]["chat"]["id"]
+                    text = update["message"]["text"].strip()
+
+                    if text.lower() == "/start":
+                        send_message(chat_id,"Ola! Bem-vindo ao NoticiasBot.\n\nUsa /noticias para"
+                            " comecar a receber as manchetes do Brasil uma a uma.",)
+
+                    elif text.lower() == "/noticias":
+                        articles = fetch_news()
+
+                        if articles:
+                            user_news_state[chat_id] = {"articles": articles, "index": 0}
+                            send_message(chat_id, "A carregar a primeira noticia...")
+                            send_next_news(chat_id)
+                        else:
+                            send_message(chat_id, "Erro ao ligar a API de noticias. Tenta novamente mais tarde.",)
+
+                    elif chat_id in user_news_state:
+            
+                        if text == "1":
+                            user_news_state[chat_id]["index"] += 1
+                            send_next_news(chat_id)
+                        elif text == "0":
+                            send_message(chat_id, "Sessao de noticias encerrada. Usa /noticias quando quiseres ver mais!",)
+                            del user_news_state[chat_id]
+
+                        else:
+                            send_message(chat_id, "Opcao invalida. Envia <b>1</b> para ver a proxima ou <b>0</b> para encerrar.",) 
+
+                    else:
+                        send_message(chat_id, "Comando nao reconhecido. Usa /start ou /noticias.",)
+
+        time.sleep(0.5)
+
+if __name__ == "__main__":
+    main()
